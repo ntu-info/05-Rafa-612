@@ -36,71 +36,53 @@ def create_app():
 
     @app.get("/terms/<term>/studies", endpoint="terms_studies")
     def get_studies_by_term(term: str):
-        """
-        依術語 term 回傳相關的 studies。
-        用法：
-        /terms/fear/studies
-        /terms/amygdala/studies?limit=50
-        規則：
-        - 忽略大小寫
-        - 空白與底線互通（"alpha band" ≈ "alpha_band"）
-        - 預設回傳 50 筆，可用 ?limit=100 調整（上限 500）
-        """
-        # 讀 limit（有上限，避免炸資料庫）
+        # 讀 limit（防爆表）
         try:
             limit = int(request.args.get("limit", 50))
         except ValueError:
             limit = 50
         limit = max(1, min(limit, 500))
 
-        # 規範化 term：小寫；支援「空白/底線」兩種變形
-        t_raw = term.strip()
-        t_lower = t_raw.lower()
-        t_us   = t_lower.replace(" ", "_")
-        t_sp   = t_lower.replace("_", " ")
+        # 規範化：大小寫不敏感、空白/底線互通
+        t = term.strip().lower()
+        t_us = t.replace(" ", "_")
+        t_sp = t.replace("_", " ")
 
         eng = get_engine()
-        payload = {
-            "ok": False,
-            "term_input": t_raw,
-            "normalized_candidates": [t_us, t_sp],
-            "count": 0,
-            "items": []
-        }
-
+        out = {"ok": False, "term_input": term, "count": 0, "items": []}
         try:
             with eng.begin() as conn:
-                # 用 ns schema
                 conn.execute(text("SET search_path TO ns, public;"))
-                # 直接從標註表 join metadata 撈資料
-                # 說明：
-                # - 以 term 等於（忽略大小寫）t_us 或 t_sp 為準
-                # - 如果 annotations_terms 有 weight，就依 weight 排序
+                # 針對「去前綴」後的詞做比對（精準 + 輕度前綴模糊）
                 sql = text("""
                     SELECT
-                        m.study_id,
-                        m.title,
-                        m.journal,
-                        m.year,
-                        a.term,
+                        m.study_id, m.title, m.journal, m.year,
+                        a.term AS raw_term,                      -- 原始有前綴的樣子
+                        split_part(a.term,'__',2) AS clean_term, -- 去前綴後的字
                         a.weight
                     FROM ns.annotations_terms AS a
-                    JOIN ns.metadata         AS m
-                    ON m.study_id = a.study_id
-                    WHERE lower(a.term) = :t_us
-                    OR lower(a.term) = :t_sp
+                    JOIN ns.metadata         AS m USING (study_id)
+                    WHERE
+                        split_part(lower(a.term),'__',2) IN (:t_us, :t_sp)
+                        OR split_part(lower(a.term),'__',2) ILIKE :prefix
                     ORDER BY a.weight DESC NULLS LAST, m.year DESC, m.study_id
                     LIMIT :limit
                 """)
-                rows = conn.execute(sql, {"t_us": t_us, "t_sp": t_sp, "limit": limit}).mappings().all()
-                payload["items"] = [dict(r) for r in rows]
-                payload["count"] = len(payload["items"])
-                payload["ok"] = True
-                return jsonify(payload), 200
+                rows = conn.execute(sql, {
+                    "t_us": t_us,
+                    "t_sp": t_sp,
+                    "prefix": f"{t_us}%",
+                    "limit": limit
+                }).mappings().all()
+
+                out["items"] = [dict(r) for r in rows]
+                out["count"] = len(out["items"])
+                out["ok"] = True
+                return jsonify(out), 200
 
         except Exception as e:
-            payload["error"] = str(e)
-            return jsonify(payload), 500
+            out["error"] = str(e)
+            return jsonify(out), 500
 
     @app.get("/locations/<coords>/studies", endpoint="locations_studies")
     def get_studies_by_coordinates(coords):
@@ -154,6 +136,162 @@ def create_app():
         except Exception as e:
             payload["error"] = str(e)
             return jsonify(payload), 500
+
+    @app.get("/dissociate/terms/<term_a>/<term_b>", endpoint="dissociate_terms")
+    def dissociate_terms(term_a: str, term_b: str):
+        # Parse limit and offset
+        try:
+            limit = int(request.args.get("limit", 50))
+        except ValueError:
+            limit = 50
+        limit = max(1, min(limit, 500))
+        try:
+            offset = int(request.args.get("offset", 0))
+        except ValueError:
+            offset = 0
+        offset = max(0, offset)
+
+        # Normalize terms: lower, strip, space/underscore equivalence
+        ta = term_a.strip().lower()
+        tb = term_b.strip().lower()
+        ta_us = ta.replace(" ", "_")
+        ta_sp = ta.replace("_", " ")
+        tb_us = tb.replace(" ", "_")
+        tb_sp = tb.replace("_", " ")
+
+        eng = get_engine()
+        out = {"ok": False, "term_a": term_a, "term_b": term_b, "count": 0, "items": []}
+        try:
+            with eng.begin() as conn:
+                conn.execute(text("SET search_path TO ns, public;"))
+                sql = text("""
+                    SELECT m.study_id, m.title, m.journal, m.year,
+                           a.weight AS weight_a
+                    FROM ns.metadata m
+                    JOIN ns.annotations_terms a ON m.study_id = a.study_id
+                    WHERE (
+                        split_part(lower(a.term),'__',2) IN (:ta_us, :ta_sp)
+                        OR split_part(lower(a.term),'__',2) ILIKE :ta_prefix
+                    )
+                    AND EXISTS (
+                        SELECT 1 FROM ns.annotations_terms a2
+                        WHERE a2.study_id = m.study_id
+                        AND (
+                            split_part(lower(a2.term),'__',2) IN (:ta_us, :ta_sp)
+                            OR split_part(lower(a2.term),'__',2) ILIKE :ta_prefix
+                        )
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM ns.annotations_terms b2
+                        WHERE b2.study_id = m.study_id
+                        AND (
+                            split_part(lower(b2.term),'__',2) IN (:tb_us, :tb_sp)
+                            OR split_part(lower(b2.term),'__',2) ILIKE :tb_prefix
+                        )
+                    )
+                    ORDER BY a.weight DESC NULLS LAST, m.year DESC, m.study_id
+                    LIMIT :limit OFFSET :offset
+                """)
+                rows = conn.execute(sql, {
+                    "ta_us": ta_us,
+                    "ta_sp": ta_sp,
+                    "ta_prefix": f"{ta_us}%",
+                    "tb_us": tb_us,
+                    "tb_sp": tb_sp,
+                    "tb_prefix": f"{tb_us}%",
+                    "limit": limit,
+                    "offset": offset
+                }).mappings().all()
+                out["items"] = [dict(r) for r in rows]
+                out["count"] = len(out["items"])
+                out["ok"] = True
+                return jsonify(out), 200
+        except Exception as e:
+            out["error"] = str(e)
+            return jsonify(out), 500
+
+    @app.get("/dissociate/locations/<coords_a>/<coords_b>", endpoint="dissociate_locations")
+    def dissociate_locations(coords_a, coords_b):
+        # Parse query params
+        try:
+            r = float(request.args.get("r", 0))
+        except ValueError:
+            r = 0.0
+        r = max(0.0, r)
+        try:
+            limit = int(request.args.get("limit", 50))
+        except ValueError:
+            limit = 50
+        limit = max(1, min(limit, 500))
+        try:
+            offset = int(request.args.get("offset", 0))
+        except ValueError:
+            offset = 0
+        offset = max(0, offset)
+
+        # Parse coords_a and coords_b
+        def parse_coords(s):
+            try:
+                x, y, z = map(float, s.split("_"))
+                return {"x": x, "y": y, "z": z}
+            except Exception:
+                return None
+        a = parse_coords(coords_a)
+        b = parse_coords(coords_b)
+        if a is None or b is None:
+            return jsonify({"ok": False, "error": "Coordinates must be in x_y_z format (e.g., -22_0_-20)"}), 400
+
+        eng = get_engine()
+        out = {"ok": False, "a": a, "b": b, "r": r, "count": 0, "items": []}
+        try:
+            with eng.begin() as conn:
+                conn.execute(text("SET search_path TO ns, public;"))
+                # Compose spatial conditions
+                if r == 0:
+                    cond_a = "ST_X(ca.geom)=:ax AND ST_Y(ca.geom)=:ay AND ST_Z(ca.geom)=:az"
+                    cond_b = "ST_X(cb.geom)=:bx AND ST_Y(cb.geom)=:by AND ST_Z(cb.geom)=:bz"
+                    cond_c2 = "ST_X(c2.geom)=:ax AND ST_Y(c2.geom)=:ay AND ST_Z(c2.geom)=:az"
+                else:
+                    probe_a = "ST_SetSRID(ST_MakePoint(:ax,:ay,:az), ST_SRID(ca.geom))"
+                    probe_b = "ST_SetSRID(ST_MakePoint(:bx,:by,:bz), ST_SRID(cb.geom))"
+                    probe_c2 = "ST_SetSRID(ST_MakePoint(:ax,:ay,:az), ST_SRID(c2.geom))"
+                    cond_a = f"(ST_3DDWithin(ca.geom, {probe_a}, :r) OR ST_DWithin(ca.geom, {probe_a}, :r))"
+                    cond_b = f"(ST_3DDWithin(cb.geom, {probe_b}, :r) OR ST_DWithin(cb.geom, {probe_b}, :r))"
+                    cond_c2 = f"(ST_3DDWithin(c2.geom, {probe_c2}, :r) OR ST_DWithin(c2.geom, {probe_c2}, :r))"
+                sql = text(f"""
+                    SELECT m.study_id, m.title, m.journal, m.year,
+                        (
+                            SELECT json_build_object('x', ST_X(c2.geom), 'y', ST_Y(c2.geom), 'z', ST_Z(c2.geom))
+                            FROM ns.coordinates c2
+                            WHERE c2.study_id = m.study_id AND {cond_c2}
+                            LIMIT 1
+                        ) AS any_example_coordinate_from_a
+                    FROM ns.metadata m
+                    WHERE EXISTS (
+                        SELECT 1 FROM ns.coordinates ca
+                        WHERE ca.study_id = m.study_id AND {cond_a}
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM ns.coordinates cb
+                        WHERE cb.study_id = m.study_id AND {cond_b}
+                    )
+                    ORDER BY m.year DESC, m.study_id
+                    LIMIT :limit OFFSET :offset
+                """)
+                rows = conn.execute(sql, {
+                    "ax": a["x"], "ay": a["y"], "az": a["z"],
+                    "bx": b["x"], "by": b["y"], "bz": b["z"],
+                    "r": r,
+                    "limit": limit,
+                    "offset": offset
+                }).mappings().all()
+                out["items"] = [dict(r) for r in rows]
+                out["count"] = len(out["items"])
+                out["ok"] = True
+                return jsonify(out), 200
+        except Exception as e:
+            out["error"] = str(e)
+            return jsonify(out), 500
 
     return app
 
