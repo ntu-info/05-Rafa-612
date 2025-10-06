@@ -60,29 +60,29 @@ def create_app():
                 payload["metadata_count"] = conn.execute(text("SELECT COUNT(*) FROM ns.metadata")).scalar()
                 payload["annotations_terms_count"] = conn.execute(text("SELECT COUNT(*) FROM ns.annotations_terms")).scalar()
 
-                # Samples
-                try:
-                    rows = conn.execute(text(
-                        "SELECT study_id, ST_X(geom) AS x, ST_Y(geom) AS y, ST_Z(geom) AS z FROM ns.coordinates LIMIT 3"
-                    )).mappings().all()
-                    payload["coordinates_sample"] = [dict(r) for r in rows]
-                except Exception:
-                    payload["coordinates_sample"] = []
+                # # Samples
+                # try:
+                #     rows = conn.execute(text(
+                #         "SELECT study_id, ST_X(geom) AS x, ST_Y(geom) AS y, ST_Z(geom) AS z FROM ns.coordinates LIMIT 3"
+                #     )).mappings().all()
+                #     payload["coordinates_sample"] = [dict(r) for r in rows]
+                # except Exception:
+                #     payload["coordinates_sample"] = []
 
-                try:
-                    # Select a few columns if they exist; otherwise select a generic subset
-                    rows = conn.execute(text("SELECT * FROM ns.metadata LIMIT 3")).mappings().all()
-                    payload["metadata_sample"] = [dict(r) for r in rows]
-                except Exception:
-                    payload["metadata_sample"] = []
+                # try:
+                #     # Select a few columns if they exist; otherwise select a generic subset
+                #     rows = conn.execute(text("SELECT * FROM ns.metadata LIMIT 3")).mappings().all()
+                #     payload["metadata_sample"] = [dict(r) for r in rows]
+                # except Exception:
+                #     payload["metadata_sample"] = []
 
-                try:
-                    rows = conn.execute(text(
-                        "SELECT study_id, contrast_id, term, weight FROM ns.annotations_terms LIMIT 3"
-                    )).mappings().all()
-                    payload["annotations_terms_sample"] = [dict(r) for r in rows]
-                except Exception:
-                    payload["annotations_terms_sample"] = []
+                # try:
+                #     rows = conn.execute(text(
+                #         "SELECT study_id, contrast_id, term, weight FROM ns.annotations_terms LIMIT 3"
+                #     )).mappings().all()
+                #     payload["annotations_terms_sample"] = [dict(r) for r in rows]
+                # except Exception:
+                #     payload["annotations_terms_sample"] = []
 
             payload["ok"] = True
             return jsonify(payload), 200
