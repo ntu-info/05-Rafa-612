@@ -255,9 +255,10 @@ def create_app():
                     probe_a = "ST_SetSRID(ST_MakePoint(:ax,:ay,:az), ST_SRID(ca.geom))"
                     probe_b = "ST_SetSRID(ST_MakePoint(:bx,:by,:bz), ST_SRID(cb.geom))"
                     probe_c2 = "ST_SetSRID(ST_MakePoint(:ax,:ay,:az), ST_SRID(c2.geom))"
-                    cond_a = f"(ST_3DDWithin(ca.geom, {probe_a}, :r) OR ST_DWithin(ca.geom, {probe_a}, :r))"
-                    cond_b = f"(ST_3DDWithin(cb.geom, {probe_b}, :r) OR ST_DWithin(cb.geom, {probe_b}, :r))"
-                    cond_c2 = f"(ST_3DDWithin(c2.geom, {probe_c2}, :r) OR ST_DWithin(c2.geom, {probe_c2}, :r))"
+                    # Try 3D, fallback to 2D+Z
+                    cond_a = f"(ST_3DDWithin(ca.geom, {probe_a}, :r) OR (ST_DWithin(ca.geom, {probe_a}, :r) AND ABS(ST_Z(ca.geom)-:az)<=:r))"
+                    cond_b = f"(ST_3DDWithin(cb.geom, {probe_b}, :r) OR (ST_DWithin(cb.geom, {probe_b}, :r) AND ABS(ST_Z(cb.geom)-:bz)<=:r))"
+                    cond_c2 = f"(ST_3DDWithin(c2.geom, {probe_c2}, :r) OR (ST_DWithin(c2.geom, {probe_c2}, :r) AND ABS(ST_Z(c2.geom)-:az)<=:r))"
                 sql = text(f"""
                     SELECT m.study_id, m.title, m.journal, m.year,
                         (
