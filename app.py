@@ -4,6 +4,7 @@ import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import OperationalError
+from markupsafe import escape
 
 _engine = None
 
@@ -22,6 +23,24 @@ def get_engine():
         pool_pre_ping=True,
     )
     return _engine
+
+def render_study_cards_html(title, items):
+    html = [f"<html><head><title>{escape(title)}</title><style>body{{font-family:sans-serif;}} .card{{border:1px solid #ccc;padding:1em;margin:1em 0;border-radius:8px;}} .card h3{{margin:0 0 0.5em 0;}} .meta{{color:#555;font-size:0.95em;}}</style></head><body>"]
+    html.append(f"<h2>{escape(title)}</h2>")
+    if not items:
+        html.append("<p>No results found.</p>")
+    for item in items:
+        html.append("<div class='card'>")
+        html.append(f"<h3>{escape(item.get('title','(no title)'))}</h3>")
+        html.append(f"<div class='meta'>Study ID: {escape(str(item.get('study_id','')))}<br>Journal: {escape(str(item.get('journal','')))}<br>Year: {escape(str(item.get('year','')))}")
+        if 'weight_a' in item:
+            html.append(f"<br>Weight: {escape(str(item['weight_a']))}")
+        if 'any_example_coordinate_from_a' in item and item['any_example_coordinate_from_a']:
+            c = item['any_example_coordinate_from_a']
+            html.append(f"<br>Example coordinate: ({escape(str(c.get('x')))}, {escape(str(c.get('y')))}, {escape(str(c.get('z')))})")
+        html.append("</div></div>")
+    html.append("</body></html>")
+    return "".join(html)
 
 def create_app():
     app = Flask(__name__)
@@ -205,6 +224,10 @@ def create_app():
                 out["items"] = [dict(r) for r in rows]
                 out["count"] = len(out["items"])
                 out["ok"] = True
+                # HTML branch
+                if request.args.get("format") == "html":
+                    title = f"Studies with '{term_a}' but not '{term_b}'"
+                    return render_study_cards_html(title, out["items"])
                 return jsonify(out), 200
         except Exception as e:
             out["error"] = str(e)
@@ -289,6 +312,10 @@ def create_app():
                 out["items"] = [dict(r) for r in rows]
                 out["count"] = len(out["items"])
                 out["ok"] = True
+                # HTML branch
+                if request.args.get("format") == "html":
+                    title = f"Studies with location {coords_a} but not {coords_b} (r={r})"
+                    return render_study_cards_html(title, out["items"])
                 return jsonify(out), 200
         except Exception as e:
             out["error"] = str(e)
