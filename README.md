@@ -1,34 +1,41 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/SO1PVZ3b)
-# Neurosynth Backend
+# Neurosynth Functional Dissociation API
 
-A lightweight Flask backend that exposes **functional dissociation** endpoints on top of a Neurosynth-backed PostgreSQL database.
+A lightweight Flask backend for querying functional dissociation in a Neurosynth-backed PostgreSQL database.
 
-The service provides two APIs that return studies mentioning one concept/coordinate **but not** the other (A \ B). You can also query the opposite direction (B \ A).
+## Quick Start
+
+### 1. Requirements
+- Python 3.10+
+- PostgreSQL 12+
+- Python packages: `Flask`, `SQLAlchemy`, `psycopg2-binary`, `gunicorn`, `markupsafe`
+
+### 2. Set up your database
+Provision a PostgreSQL database and note the connection string (e.g., on Render, Supabase, or local).
+
+### 3. Set environment variable
+Set the database URL as an environment variable:
+
+```bash
+export DB_URL=postgresql://<USER>:<PASSWORD>@<HOST>:5432/<DBNAME>
+```
+
+### 4. Run the app
+
+For development:
+```bash
+python app.py
+```
+
+For production (recommended):
+```bash
+gunicorn app:app --bind 0.0.0.0:$PORT
+```
 
 ---
 
-## Table of Contents
+## API Endpoints
 
-- [Endpoints](#endpoints)
-  - [Dissociate by terms](#dissociate-by-terms)
-  - [Dissociate by MNI coordinates](#dissociate-by-mni-coordinates)
-- [Quick Start](#quick-start)
-  - [1) Provision PostgreSQL](#1-provision-postgresql)
-  - [2) Verify the connection](#2-verify-the-connection)
-  - [3) Populate the database](#3-populate-the-database)
-  - [4) Run the Flask service](#4-run-the-flask-service)
-  - [5) Smoke tests](#5-smoke-tests)
-- [Environment Variables](#environment-variables)
-- [Example Requests](#example-requests)
-- [Requirements](#requirements)
-- [Notes](#notes)
-- [License](#license)
-
----
-
-## Endpoints
-
-### Dissociate by terms
+### 1. Dissociate by Terms
 
 ```
 GET /dissociate/terms/<term_a>/<term_b>
@@ -36,121 +43,114 @@ GET /dissociate/terms/<term_a>/<term_b>
 
 Returns studies that mention **`term_a`** but **not** `term_b`.
 
-**Examples**
+#### Query Parameters
+- `limit` (int, default 50, max 500): Max results
+- `offset` (int, default 0): Pagination offset
+- `format` (string, optional): `html` for HTML cards, default is JSON
 
+#### Example (JSON)
 ```
-/dissociate/terms/posterior_cingulate/ventromedial_prefrontal
-/dissociate/terms/ventromedial_prefrontal/posterior_cingulate
+curl "<RENDER_URL>/dissociate/terms/amygdala/insula?limit=10"
 ```
+
+#### Example (HTML)
+```
+curl "<RENDER_URL>/dissociate/terms/amygdala/insula?format=html"
+```
+
+#### Response (JSON)
+```json
+{
+  "ok": true,
+  "term_a": "amygdala",
+  "term_b": "insula",
+  "count": 2,
+  "items": [
+    {"study_id": "123", "title": "Amygdala Study", "journal": "Brain", "year": 2018, "weight_a": 0.57}
+  ]
+}
+```
+
+#### Response (HTML)
+A web page with a list of study cards.
 
 ---
 
-### Dissociate by MNI coordinates
+### 2. Dissociate by MNI Coordinates
 
 ```
 GET /dissociate/locations/<x1_y1_z1>/<x2_y2_z2>
 ```
 
-Coordinates are passed as `x_y_z` (underscores, not commas).  
-Returns studies that mention **`[x1, y1, z1]`** but **not** `[x2, y2, z2]`.
+Returns studies that mention coordinate **A** but **not** **B**.
 
-**Default Mode Network test case**
+#### Path Parameters
+- `<x1_y1_z1>`: e.g., `0_-52_26` (underscores, not commas)
+- `<x2_y2_z2>`: e.g., `-2_50_-6`
 
+#### Query Parameters
+- `r` (float, default 0): Tolerance in mm. `r=0` for exact match; `r>0` for 3D tolerance.
+- `limit` (int, default 50, max 500): Max results
+- `offset` (int, default 0): Pagination offset
+- `format` (string, optional): `html` for HTML cards, default is JSON
+
+#### Example (JSON)
 ```
-/dissociate/locations/0_-52_26/-2_50_-6
-/dissociate/locations/-2_50_-6/0_-52_26
+curl "<RENDER_URL>/dissociate/locations/0_-52_26/-2_50_-6?r=2&limit=5"
 ```
 
-> Tip: You may design a single endpoint that returns **both directions** in one response (A–B **and** B–A) if that better suits your client.
+#### Example (HTML)
+```
+curl "<RENDER_URL>/dissociate/locations/0_-52_26/-2_50_-6?format=html"
+```
+
+#### Response (JSON)
+```json
+{
+  "ok": true,
+  "a": {"x": 0, "y": -52, "z": 26},
+  "b": {"x": -2, "y": 50, "z": -6},
+  "r": 2.0,
+  "count": 1,
+  "items": [
+    {"study_id": "456", "title": "DMN Study", "journal": "NeuroImage", "year": 2020, "any_example_coordinate_from_a": {"x": 0, "y": -52, "z": 26}}
+  ]
+}
+```
+
+#### Response (HTML)
+A web page with a list of study cards.
 
 ---
 
-## Quick Start
-
-### 1) Provision PostgreSQL
-
-Create a PostgreSQL database (e.g., on Render).
-
-### 2) Verify the connection
-
-```bash
-python check_db.py --url "postgresql://<USER>:<PASSWORD>@<HOST>:5432/<DBNAME>"
-```
-
-### 3) Populate the database
-
-```bash
-python create_db.py --url "postgresql://<USER>:<PASSWORD>@<HOST>:5432/<DBNAME>"
-```
-
-### 4) Run the Flask service
-
-Deploy `app.py` as a Web Service (e.g., on Render) and set the environment variable:
-
-- `DB_URL=postgresql://<USER>:<PASSWORD>@<HOST>:5432/<DBNAME>`
-
-Use a production server such as Gunicorn as your start command:
-
-```bash
-gunicorn app:app --bind 0.0.0.0:$PORT
-```
-
-### 5) Smoke tests
-
-After deployment, check the basic endpoints:
-
-- Images: `https://<your-app>.onrender.com/img`
-- DB connectivity: `https://<your-app>.onrender.com/test_db`
+## Pagination & Tolerance
+- Use `limit` and `offset` for paging through results.
+- Use `r` (tolerance) for fuzzy coordinate matching (in mm, 3D Euclidean).
 
 ---
 
-## Environment Variables
+## Example Usage
 
-- **`DB_URL`** – Full PostgreSQL connection string used by the app.  
-  Example: `postgresql://<USER>:<PASSWORD>@<HOST>:5432/<DBNAME>`
-
-> **Security note:** Never commit real credentials to version control. Use environment variables or your hosting provider’s secret manager.
-
----
-
-## Example Requests
-
-**By terms**
-
+**By terms:**
 ```bash
-curl https://<your-app>.onrender.com/dissociate/terms/posterior_cingulate/ventromedial_prefrontal
-curl https://<your-app>.onrender.com/dissociate/terms/ventromedial_prefrontal/posterior_cingulate
+curl "<RENDER_URL>/dissociate/terms/posterior_cingulate/ventromedial_prefrontal"
+curl "<RENDER_URL>/dissociate/terms/ventromedial_prefrontal/posterior_cingulate?format=html"
 ```
 
-**By coordinates**
-
+**By coordinates:**
 ```bash
-curl https://<your-app>.onrender.com/dissociate/locations/0_-52_26/-2_50_-6
-curl https://<your-app>.onrender.com/dissociate/locations/-2_50_-6/0_-52_26
+curl "<RENDER_URL>/dissociate/locations/0_-52_26/-2_50_-6?r=1"
+curl "<RENDER_URL>/dissociate/locations/-2_50_-6/0_-52_26?format=html"
 ```
 
 ---
 
-## Requirements
-
-- Python 3.10+
-- PostgreSQL 12+
-- Python dependencies (typical):
-  - `Flask`
-  - `SQLAlchemy`
-  - PostgreSQL driver (e.g., `psycopg2-binary`)
-  - Production WSGI server (e.g., `gunicorn`)
-
----
-
-## Notes
-
-- Path parameters use underscores (`_`) between coordinates: `x_y_z`.
-- Term strings should be URL-safe (e.g., `posterior_cingulate`, `ventromedial_prefrontal`). Replace spaces with underscores on the client if needed.
-- The term/coordinate pairs above illustrate a **Default Mode Network** dissociation example. Adjust for your analysis.
+## Troubleshooting
+- Ensure your `DB_URL` is set and the database is accessible.
+- For deployment, set the environment variable in your hosting provider's dashboard.
+- For errors, check the `/test_db` endpoint: `curl <RENDER_URL>/test_db`
 
 ---
 
 ## License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
+MIT
